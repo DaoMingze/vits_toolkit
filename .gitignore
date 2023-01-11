@@ -8,7 +8,17 @@ __pycache__
 
 build
 *.c
-monotonic_align/monotonic_align
+monotonic_align
 /.vs/vits/FileContentIndex
-configs/dracu_japanese_base2.json
-configs/tolove_japanese_base2.json
+
+
+.vscode
+vits_toolkit.code-workspace
+venv
+thesis
+model
+output
+doc
+wavs
+configs
+filelists

@@ -12,24 +12,28 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.cuda.amp import autocast, GradScaler
-
-import librosa
+from pqmf import PQMF
 import logging
 
 logging.getLogger("numba").setLevel(logging.WARNING)
-
 import commons
 import utils
 from data_utils import TextAudioLoader, TextAudioCollate, DistributedBucketSampler
-from models import (
+from models_istft import (
     SynthesizerTrn,
     MultiPeriodDiscriminator,
 )
-from losses import generator_loss, discriminator_loss, feature_loss, kl_loss
+from losses import (
+    generator_loss,
+    discriminator_loss,
+    feature_loss,
+    kl_loss,
+    subband_stft_loss,
+)
 from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 from text.symbols import symbols
 
-# torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(True)
 torch.backends.cudnn.benchmark = True
 global_step = 0
 
@@ -41,6 +45,7 @@ def main():
     n_gpus = torch.cuda.device_count()
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "8000"
+    #   n_gpus = 1
 
     hps = utils.get_hparams()
     mp.spawn(
@@ -90,7 +95,7 @@ def run(rank, n_gpus, hps):
         eval_dataset = TextAudioLoader(hps.data.validation_files, hps.data)
         eval_loader = DataLoader(
             eval_dataset,
-            num_workers=6,
+            num_workers=1,
             shuffle=False,
             batch_size=hps.train.batch_size,
             pin_memory=True,
@@ -203,6 +208,7 @@ def train_and_evaluate(
         with autocast(enabled=hps.train.fp16_run):
             (
                 y_hat,
+                y_hat_mb,
                 l_length,
                 attn,
                 ids_slice,
@@ -260,7 +266,18 @@ def train_and_evaluate(
 
                 loss_fm = feature_loss(fmap_r, fmap_g)
                 loss_gen, losses_gen = generator_loss(y_d_hat_g)
-                loss_gen_all = loss_gen + loss_fm + loss_mel + loss_dur + loss_kl
+
+                if hps.model.mb_istft_vits == True:
+                    pqmf = PQMF(y.device)
+                    y_mb = pqmf.analysis(y)
+                    loss_subband = subband_stft_loss(hps, y_mb, y_hat_mb)
+                else:
+                    loss_subband = torch.tensor(0.0)
+
+                loss_gen_all = (
+                    loss_gen + loss_fm + loss_mel + loss_dur + loss_kl + loss_subband
+                )
+
         optim_g.zero_grad()
         scaler.scale(loss_gen_all).backward()
         scaler.unscale_(optim_g)
@@ -271,7 +288,15 @@ def train_and_evaluate(
         if rank == 0:
             if global_step % hps.train.log_interval == 0:
                 lr = optim_g.param_groups[0]["lr"]
-                losses = [loss_disc, loss_gen, loss_fm, loss_mel, loss_dur, loss_kl]
+                losses = [
+                    loss_disc,
+                    loss_gen,
+                    loss_fm,
+                    loss_mel,
+                    loss_dur,
+                    loss_kl,
+                    loss_subband,
+                ]
                 logger.info(
                     "Train Epoch: {} [{:.0f}%]".format(
                         epoch, 100.0 * batch_idx / len(train_loader)
@@ -292,6 +317,7 @@ def train_and_evaluate(
                         "loss/g/mel": loss_mel,
                         "loss/g/dur": loss_dur,
                         "loss/g/kl": loss_kl,
+                        "loss/g/subband": loss_subband,
                     }
                 )
 
@@ -375,7 +401,9 @@ def evaluate(hps, generator, eval_loader, writer_eval):
             y = y[:1]
             y_lengths = y_lengths[:1]
             break
-        y_hat, attn, mask, *_ = generator.module.infer(x, x_lengths, max_len=1000)
+        y_hat, y_hat_mb, attn, mask, *_ = generator.module.infer(
+            x, x_lengths, max_len=1000
+        )
         y_hat_lengths = mask.sum([1, 2]).long() * hps.data.hop_length
 
         mel = spec_to_mel_torch(
@@ -417,4 +445,5 @@ def evaluate(hps, generator, eval_loader, writer_eval):
 
 
 if __name__ == "__main__":
+    os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
     main()
