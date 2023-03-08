@@ -7,7 +7,7 @@ tensorboard
 torch
 torchvision
 unidecode
-pyopenjtalk
+
 jamo
 pypinyin
 jieba
