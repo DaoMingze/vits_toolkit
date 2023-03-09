@@ -11,7 +11,7 @@ import torch
 
 MATPLOTLIB_FLAG = False
 
-logging.basicConfig(stream=sys.stdout, level=logging.WARNING)
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 logger = logging
 
 
@@ -172,7 +172,7 @@ def get_hparams(init=True):
     parser.add_argument("-m", "--model", type=str, required=True, help="Model name")
 
     args = parser.parse_args()
-    model_dir = os.path.join("./model", args.model)
+    model_dir = os.path.join("../drive/MyDrive", args.model)
 
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)

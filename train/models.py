@@ -6,7 +6,7 @@ from torch.nn import functional as F
 
 import commons
 import modules
-import train.attentions as attentions
+import attentions
 import monotonic_align
 
 from torch.nn import Conv1d, ConvTranspose1d, AvgPool1d, Conv2d
